@@ -526,6 +526,13 @@ def parse_args(input_args=None):
         "--skip_save_text_encoder", action="store_true", required=False, help="Set to not save text encoder"
     )
 
+    parser.add_argument(
+        "--captions_dir",
+        type=str,
+        default=None,
+        help="The folder where captions files are stored",
+    )    
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -572,6 +579,7 @@ class DreamBoothDataset(Dataset):
         encoder_hidden_states=None,
         instance_prompt_encoder_hidden_states=None,
         tokenizer_max_length=None,
+        captions_dir=None,
     ):
         self.size = size
         self.center_crop = center_crop
@@ -579,6 +587,7 @@ class DreamBoothDataset(Dataset):
         self.encoder_hidden_states = encoder_hidden_states
         self.instance_prompt_encoder_hidden_states = instance_prompt_encoder_hidden_states
         self.tokenizer_max_length = tokenizer_max_length
+        self.captions_dir = captions_dir
 
         self.instance_data_root = Path(instance_data_root)
         if not self.instance_data_root.exists():
@@ -616,14 +625,27 @@ class DreamBoothDataset(Dataset):
 
     def __getitem__(self, index):
         example = {}
-        instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
+        instance_image_path = self.instance_images_path[index % self.num_instance_images]
+        instance_image = Image.open(instance_image_path)
         instance_image = exif_transpose(instance_image)
 
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
         example["instance_images"] = self.image_transforms(instance_image)
 
-        if self.encoder_hidden_states is not None:
+        if self.captions_dir is not None:
+          instance_file = Path(instance_image_path).stem
+          instance_caption_file =os.path.join(self.captions_dir, instance_file+'.txt')
+          if os.path.exists(instance_caption_file):
+            with open(instance_caption_file, "r") as f:
+                instance_caption_prompt=f.read()
+            print(f" [1;32m Caption for '{instance_file}' => '{instance_caption_prompt}'...")
+            text_inputs = tokenize_prompt(
+                self.tokenizer, instance_caption_prompt, tokenizer_max_length=self.tokenizer_max_length
+            )
+            example["instance_prompt_ids"] = text_inputs.input_ids
+            example["instance_attention_mask"] = text_inputs.attention_mask
+        elif self.encoder_hidden_states is not None:
             example["instance_prompt_ids"] = self.encoder_hidden_states
         else:
             text_inputs = tokenize_prompt(
@@ -1034,6 +1056,7 @@ def main(args):
         encoder_hidden_states=pre_computed_encoder_hidden_states,
         instance_prompt_encoder_hidden_states=pre_computed_instance_prompt_encoder_hidden_states,
         tokenizer_max_length=args.tokenizer_max_length,
+        captions_dir=args.captions_dir,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
